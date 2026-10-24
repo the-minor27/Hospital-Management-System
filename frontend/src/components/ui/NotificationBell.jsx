@@ -4,7 +4,7 @@ import { Bell } from "lucide-react";
 import toast from "react-hot-toast";
 import { api, apiCall } from "../../api/client";
 
-const apiBaseUrl = import.meta.env.VITE_API_URL || "http://localhost:5000/api";
+const apiBaseUrl = import.meta.env.VITE_API_URL || "http://localhost:5001/api";
 
 function formatTime(value) {
   const date = new Date(value);

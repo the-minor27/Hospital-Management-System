@@ -7,6 +7,7 @@ import { appUrl, isEmailConfigured, sendEmail } from "../utils/mailer.js";
 
 const publicUser = (user) => ({ id: user.id, name: user.name, email: user.email, role: user.role });
 const VERIFICATION_TOKEN_TTL = 24 * 60 * 60 * 1000;
+const requireEmailVerification = process.env.REQUIRE_EMAIL_VERIFICATION !== "false";
 
 function createVerificationToken() {
   const rawToken = crypto.randomBytes(32).toString("hex");
@@ -44,7 +45,7 @@ export const register = asyncHandler(async (req, res) => {
 
   const user = await prisma.$transaction(async (tx) => {
     const createdUser = await tx.user.create({
-      data: { name, email, passwordHash, phone, role: "PATIENT", emailVerified: false },
+      data: { name, email, passwordHash, phone, role: "PATIENT", emailVerified: !requireEmailVerification },
     });
 
     await tx.patient.create({
@@ -58,19 +59,23 @@ export const register = asyncHandler(async (req, res) => {
     return createdUser;
   });
 
-  const verification = createVerificationToken();
-  await prisma.emailVerificationToken.deleteMany({ where: { userId: user.id } });
-  await prisma.emailVerificationToken.create({
-    data: { userId: user.id, tokenHash: verification.tokenHash, expiresAt: verification.expiresAt },
-  });
+  if (requireEmailVerification) {
+    const verification = createVerificationToken();
+    await prisma.emailVerificationToken.deleteMany({ where: { userId: user.id } });
+    await prisma.emailVerificationToken.create({
+      data: { userId: user.id, tokenHash: verification.tokenHash, expiresAt: verification.expiresAt },
+    });
 
-  await sendVerificationEmail(user, verification.rawToken).catch((error) => {
-    console.error("Verification email failed:", error.message);
-  });
+    await sendVerificationEmail(user, verification.rawToken).catch((error) => {
+      console.error("Verification email failed:", error.message);
+    });
+  }
 
   res.status(201).json({
     success: true,
-    message: "Account created. Check your email to verify your account before signing in.",
+    message: requireEmailVerification
+      ? "Account created. Check your email to verify your account before signing in."
+      : "Account created successfully.",
     data: { user: publicUser(user) },
   });
 });
@@ -116,7 +121,7 @@ export const login = asyncHandler(async (req, res) => {
 
   const isMatch = await bcrypt.compare(password, user.passwordHash);
   if (!isMatch) throw new ApiError(401, "Invalid email or password.");
-  if (user.emailVerified === false) throw new ApiError(403, "Please verify your email before signing in.");
+  if (requireEmailVerification && user.emailVerified === false) throw new ApiError(403, "Please verify your email before signing in.");
 
   const token = signToken({ id: user.id, role: user.role });
 
@@ -155,7 +160,7 @@ export const resendVerification = asyncHandler(async (req, res) => {
   const { email } = req.body;
   const user = await prisma.user.findUnique({ where: { email } });
 
-  if (user && !user.emailVerified) {
+  if (user && !user.emailVerified && requireEmailVerification) {
     const verification = createVerificationToken();
     await prisma.emailVerificationToken.deleteMany({ where: { userId: user.id } });
     await prisma.emailVerificationToken.create({
